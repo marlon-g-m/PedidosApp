@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PedidosApp</title>
+<style>
+:root{
+  --bg:#f4f6f9; --surface:#ffffff; --sunk:#e9edf3; --fg:#17202e; --muted:#5a6679; --line:#d5dce7;
+  --accent:#0a62c9; --accent-fg:#ffffff; --ok:#1b7f45; --bad:#b3261e; --warn:#8a5a00;
+  --code:#0f1724; --code-fg:#d9e4f2; --code-dim:#7f93ad;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0d131c; --surface:#141c28; --sunk:#1b2533; --fg:#e4eaf2; --muted:#98a6ba; --line:#28344a;
+  --accent:#5aa2f5; --accent-fg:#0d131c; --ok:#4cc27e; --bad:#ff7b72; --warn:#f0a73a;
+  --code:#080d15; color-scheme:dark;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:24px max(16px,env(safe-area-inset-left,0px)) 56px}
+header{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;margin-bottom:20px}
+h1{margin:0;font-size:26px;letter-spacing:-.01em}
+h1 small{display:block;font-size:13.5px;font-weight:400;color:var(--muted);letter-spacing:0;margin-top:2px}
+h2{margin:0 0 12px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:99px;background:var(--sunk);font-size:13.5px;font-weight:600}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted)}
+.badge.ok .dot{background:var(--ok)} .badge.bad .dot{background:var(--bad)} .badge.wait .dot{background:var(--warn)}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:18px}
+.apibar{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px}
+.apibar input{flex:1;min-width:220px}
+.grid{display:grid;gap:20px;grid-template-columns:minmax(0,320px) minmax(0,1fr);align-items:start}
+@media (max-width:760px){.grid{grid-template-columns:minmax(0,1fr)}}
+label{display:block;font-size:13px;font-weight:600;margin-bottom:4px}
+input{width:100%;font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg)}
+input:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.field{margin-bottom:14px}
+button{font:inherit;font-weight:600;padding:9px 14px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg);cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+button:disabled{opacity:.55;cursor:wait}
+.row{display:flex;flex-wrap:wrap;gap:10px}
+.hint{font-size:13px;color:var(--muted);margin:10px 0 0}
+.msg{font-size:13.5px;margin-top:10px;min-height:1.2em}
+.msg.bad{color:var(--bad)} .msg.ok{color:var(--ok)} .msg.wait{color:var(--warn)}
+.tbl{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+td.num{font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:0}
+.pill{display:inline-block;padding:2px 9px;border-radius:99px;background:var(--sunk);font-size:12.5px;font-weight:600}
+.del{padding:4px 10px;font-size:13px;color:var(--bad)}
+.empty{padding:26px 8px;text-align:center;color:var(--muted)}
+.log{background:var(--code);color:var(--code-fg);border-radius:10px;padding:12px 14px;font:12.5px/1.6 ui-monospace,Consolas,monospace;max-height:230px;overflow:auto}
+.log div{white-space:pre-wrap;word-break:break-word}
+.log .t{color:var(--code-dim)} .s2{color:#4cc27e} .s4{color:#f0a73a} .s0,.s5{color:#ff7b72}
+.flow{display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;font-size:13.5px;color:var(--muted);margin-top:20px}
+.flow b{color:var(--fg)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PedidosApp<small>API .NET + EF Core + cola de Azure Storage + Azure Function</small></h1>
+    <span class="badge wait" id="health"><span class="dot"></span><span id="healthText">Comprobando…</span></span>
+  </header>
+
+  <div class="apibar">
+    <input id="apiUrl" type="url" aria-label="URL de la API" placeholder="https://tu-api.azurecontainerapps.io">
+    <button id="saveApi">Usar esta URL</button>
+  </div>
+
+  <div class="grid">
+    <section class="panel">
+      <h2>Nuevo pedido</h2>
+      <form id="form" autocomplete="off">
+        <div class="field"><label for="cliente">Cliente</label><input id="cliente" required maxlength="100" placeholder="Ana Pérez"></div>
+        <div class="field"><label for="total">Total (CLP)</label><input id="total" type="number" min="1" step="1" required placeholder="4990"></div>
+        <div class="row">
+          <button class="primary" id="send" type="submit">Crear pedido</button>
+          <button type="button" id="bad" title="Envía total 0 para ver el 400 Bad Request">Probar error 400</button>
+        </div>
+        <div class="msg" id="formMsg" role="status"></div>
+      </form>
+      <p class="hint">Al crear un pedido, la API lo guarda y publica un mensaje en la cola <code>pedidos-creados</code>. La Azure Function lo procesa en segundo plano.</p>
+    </section>
+
+    <section class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h2 style="margin:0">Pedidos</h2>
+        <button id="refresh">Actualizar</button>
+      </div>
+      <div class="tbl">
+        <table>
+          <thead><tr><th>Id</th><th>Cliente</th><th>Total</th><th>Estado</th><th>Creado</th><th></th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty" hidden>No hay pedidos todavía. Crea el primero con el formulario.</div>
+    </section>
+  </div>
+
+  <h2 style="margin-top:24px">Peticiones HTTP</h2>
+  <div class="log" id="log" aria-live="polite"><div class="t">Las peticiones al backend aparecerán aquí.</div></div>
+
+  <div class="flow"><b>Cliente</b> → API → base de datos → cola → Azure Function</div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const KEY = 'pedidosapp.api';
+const DEFAULT_API = 'https://pedidos-api.ashywave-b37149ff.brazilsouth.azurecontainerapps.io';
+const clp = new Intl.NumberFormat('es-CL', {style:'currency', currency:'CLP', maximumFractionDigits:0});
+
+function load(){ try{ return localStorage.getItem(KEY); }catch(e){ return null; } }
+function save(v){ try{ localStorage.setItem(KEY, v); }catch(e){} }
+
+let base = new URLSearchParams(location.search).get('api') || load() || DEFAULT_API;
+$('#apiUrl').value = base;
+
+function log(method, path, status, ms, note){
+  const box = $('#log');
+  if (box.firstElementChild && box.firstElementChild.classList.contains('t') && !box.firstElementChild.dataset.row) box.innerHTML = '';
+  const d = document.createElement('div');
+  d.dataset.row = '1';
+  const cls = status === 0 ? 's0' : 's' + String(status)[0];
+  const t = new Date().toLocaleTimeString('es-CL');
+  d.innerHTML = '<span class="t"></span> <b></b> <span class="p"></span>  <span class="st ' + cls + '"></span> <span class="t ms"></span>';
+  d.querySelector('.t').textContent = t;
+  d.querySelector('b').textContent = method;
+  d.querySelector('.p').textContent = path;
+  d.querySelector('.st').textContent = status === 0 ? 'SIN RESPUESTA' : status;
+  d.querySelector('.ms').textContent = ms + ' ms' + (note ? '  ' + note : '');
+  box.prepend(d);
+  while (box.children.length > 40) box.lastChild.remove();
+}
+
+async function request(method, path, body){
+  const url = base.replace(/\/+$/, '') + path;
+  const t0 = performance.now();
+  const wake = setTimeout(() => setMsg('#formMsg', 'wait', 'Despertando la API… escala a cero sin tráfico y la primera petición puede tardar 10 a 20 s.'), 2500);
+  try{
+    const res = await fetch(url, {
+      method,
+      headers: body ? {'Content-Type':'application/json'} : undefined,
+      body: body ? JSON.stringify(body) : undefined
+    });
+    const ms = Math.round(performance.now() - t0);
+    const text = await res.text();
+    let data = text; try{ data = text ? JSON.parse(text) : null; }catch(e){}
+    log(method, path, res.status, ms, res.ok ? '' : (typeof data === 'string' ? data : ''));
+    return {ok:res.ok, status:res.status, data};
+  }catch(e){
+    log(method, path, 0, Math.round(performance.now() - t0), 'La API no responde, la URL es incorrecta o CORS bloquea este origen');
+    return {ok:false, status:0, data:null};
+  }finally{ clearTimeout(wake); }
+}
+
+function setMsg(sel, kind, text){ const el = $(sel); el.className = 'msg ' + kind; el.textContent = text; }
+
+function fecha(s){
+  if (!s) return '';
+  const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + 'Z';
+  return new Date(iso).toLocaleString('es-CL', {dateStyle:'short', timeStyle:'medium'});
+}
+
+async function health(){
+  const b = $('#health'); b.className = 'badge wait'; $('#healthText').textContent = 'Comprobando…';
+  const r = await request('GET', '/health');
+  if (r.ok){ b.className = 'badge ok'; $('#healthText').textContent = 'API conectada'; }
+  else { b.className = 'badge bad'; $('#healthText').textContent = r.status ? 'API con error ' + r.status : 'API sin conexión'; }
+  return r.ok;
+}
+
+async function list(){
+  const r = await request('GET', '/api/pedidos');
+  const rows = $('#rows'); rows.innerHTML = '';
+  const items = r.ok && Array.isArray(r.data) ? r.data : [];
+  $('#empty').hidden = items.length > 0 || !r.ok;
+  for (const p of items){
+    const tr = document.createElement('tr');
+    const cells = [p.id, p.cliente, clp.format(p.total), p.estado, fecha(p.creadoEn)];
+    cells.forEach((v, i) => {
+      const td = document.createElement('td');
+      if (i === 3){ const s = document.createElement('span'); s.className = 'pill'; s.textContent = v; td.appendChild(s); }
+      else { td.textContent = v; if (i === 0 || i === 2) td.className = 'num'; }
+      tr.appendChild(td);
+    });
+    const td = document.createElement('td');
+    const b = document.createElement('button'); b.className = 'del'; b.textContent = 'Borrar';
+    b.addEventListener('click', async () => { b.disabled = true; await request('DELETE', '/api/pedidos/' + p.id); list(); });
+    td.appendChild(b); tr.appendChild(td); rows.appendChild(tr);
+  }
+}
+
+async function crear(payload, esPrueba){
+  $('#send').disabled = true; $('#bad').disabled = true;
+  setMsg('#formMsg', 'wait', 'Enviando…');
+  const r = await request('POST', '/api/pedidos', payload);
+  $('#send').disabled = false; $('#bad').disabled = false;
+  if (r.ok){
+    setMsg('#formMsg', 'ok', 'Pedido #' + r.data.id + ' creado (201). Evento publicado en la cola.');
+    if (!esPrueba) $('#form').reset();
+    list();
+  } else if (r.status === 400){
+    setMsg('#formMsg', 'bad', '400 Bad Request: ' + (typeof r.data === 'string' ? r.data : 'datos inválidos'));
+  } else if (r.status === 0){
+    setMsg('#formMsg', 'bad', 'No hay conexión con la API. Revisa la URL de arriba.');
+  } else {
+    setMsg('#formMsg', 'bad', 'Error ' + r.status + '. Si es 500, revisa que la cola (Azurite o Storage) esté disponible.');
+  }
+}
+
+$('#form').addEventListener('submit', e => {
+  e.preventDefault();
+  crear({cliente: $('#cliente').value.trim(), total: Number($('#total').value)}, false);
+});
+$('#bad').addEventListener('click', () => crear({cliente:'', total:0}, true));
+$('#refresh').addEventListener('click', () => list());
+$('#saveApi').addEventListener('click', async () => {
+  base = $('#apiUrl').value.trim() || DEFAULT_API; save(base);
+  if (await health()) list();
+});
+
+(async () => { if (await health()) list(); })();
+</script>
+</body>
+</html>

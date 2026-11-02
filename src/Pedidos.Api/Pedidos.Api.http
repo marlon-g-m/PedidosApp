@@ -1,0 +1,15 @@
+@host = http://localhost:5017
+
+GET {{host}}/health
+
+###
+GET {{host}}/api/pedidos
+
+###
+POST {{host}}/api/pedidos
+Content-Type: application/json
+
+{ "cliente": "Marlon", "total": 15990 }
+
+###
+GET {{host}}/api/pedidos/1

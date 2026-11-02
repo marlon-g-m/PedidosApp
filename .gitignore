@@ -1,0 +1,9 @@
+bin/
+obj/
+*.db
+*.db-*
+local.settings.json
+.vs/
+*.log
+.azurite/
+__azurite*

@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Pedidos.Api/Pedidos.Api.csproj" />
+  </Folder>
+  <Folder Name="/src/Pedidos.Functions/">
+    <Project Path="src/Pedidos.Functions/Pedidos_Functions.csproj" />
+  </Folder>
+</Solution>
