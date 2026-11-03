@@ -1,18 +1,25 @@
 # PedidosApp
 
-API de pedidos en **.NET 10** que guarda cada pedido con **Entity Framework Core** y publica un evento en una **cola de Azure Storage**. Una **Azure Function** consume ese evento y hace el procesamiento en segundo plano, de modo que la API responde rápido. Todo está contenerizado con **Docker** y la imagen se desplegó en **Azure Container Apps**.
+API de pedidos en **.NET 10** que guarda cada pedido con **Entity Framework Core** y publica un evento en una **cola de Azure Storage**. Una **Azure Function** consume ese evento y hace el procesamiento en segundo plano, de modo que la API responde rápido. Está contenerizada con **Docker**, desplegada en **Azure Container Apps**, publicada a través de **Azure API Management** y consumida desde un frontend en **Azure Static Web Apps**.
 
 Proyecto de práctica para reforzar backend con .NET y Azure.
+
+**Demo del frontend:** https://ashy-rock-0910d0a1e.3.azurestaticapps.net
+*(la demo puede no estar disponible si los recursos de Azure ya fueron eliminados; la evidencia está en la carpeta [`evidencia`](evidencia))*
 
 ## Arquitectura
 
 ```mermaid
 flowchart LR
-    C[Cliente HTTP] -->|POST /api/pedidos| A[Pedidos.Api<br/>ASP.NET Core + EF Core]
+    U[Navegador<br/>Static Web Apps] -->|HTTPS + CORS| A
+    C[Cliente HTTP] -->|Ocp-Apim-Subscription-Key| M[API Management<br/>llave + rate limit]
+    M --> A[Pedidos.Api<br/>ASP.NET Core + EF Core<br/>Container Apps]
     A -->|1. guarda| D[(SQLite)]
     A -->|2. publica evento| Q[[Cola pedidos-creados<br/>Azure Storage Queue]]
     Q -->|3. QueueTrigger| F[Azure Function<br/>ProcesarPedido]
 ```
+
+El frontend llama directo a la API (restringida por CORS a su origen). Los clientes externos entran por API Management, que exige una subscription key y aplica un límite de llamadas.
 
 En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real.
 
@@ -26,6 +33,8 @@ En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real
 | Procesamiento | Azure Functions (isolated worker), `QueueTrigger` |
 | Contenedores | Docker (multi-stage), Docker Compose |
 | Nube | Azure Container Registry, Azure Container Apps |
+| Gateway | Azure API Management (nivel Consumption) |
+| Frontend | HTML + JavaScript simple, Azure Static Web Apps |
 
 ## Estructura
 
@@ -33,6 +42,8 @@ En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real
 PedidosApp/
 ├── docker-compose.yml          # API + Azurite
 ├── PedidosApp.slnx
+├── frontend/index.html         # frontend de prueba
+├── evidencia/                  # capturas de la prueba en Azure
 └── src/
     ├── Pedidos.Api/
     │   ├── Controllers/PedidosController.cs
@@ -107,14 +118,30 @@ dotnet run
 
 Requiere Azurite corriendo (`npm i -g azurite` y `azurite --location .azurite --skipApiVersionCheck`) para poder publicar en la cola.
 
+**Frontend:** abre `frontend/index.html` en el navegador y escribe la URL de la API. También acepta `?api=URL` en la dirección.
+
 ## Despliegue en Azure
 
-Resumen de lo que se hizo:
+Resumen de lo que se hizo (con Azure CLI):
 
 1. Resource group y **Azure Container Registry**.
-2. `docker build`, `docker tag` y `docker push` de la imagen al registro.
-3. **Azure Container Apps** con ingreso externo en el puerto 8080.
+2. `docker build`, `docker tag` y `docker push` de la imagen al registro. Cada cambio usa un tag nuevo (`v1`, `v2`, `v3`), porque reutilizar un tag no provoca un nuevo despliegue.
+3. **Azure Container Apps** con ingreso externo en el puerto 8080. Se eligió sobre App Service porque la API ya estaba en un contenedor y porque la cuenta gratuita no tenía cuota para App Service.
 4. **Storage Account** para la cola; su cadena de conexión se guarda como *secret* de la app y se expone como `ConnectionStrings__Storage`.
+5. **CORS** restringido al origen del frontend con la variable `Cors__Origins`.
+6. **Azure Static Web Apps** (plan gratuito) para el frontend.
+7. **API Management** (nivel Consumption): se importó el OpenAPI de la API, se probó que sin subscription key responde 401 y con ella 200, y se añadió la política `rate-limit` (5 llamadas por 30 segundos) que devuelve 429.
+
+### Evidencia
+
+| Prueba | Captura |
+|---|---|
+| Límite de llamadas en APIM (200 y 429) | `evidencia/apim-prueba-429-powershell.png` |
+| Política `rate-limit` en el portal | `evidencia/apim-politica-rate-limit.png` |
+
+### Notas de la importación a APIM
+
+.NET 10 genera OpenAPI 3.1 y escribe los números como `"type": ["number","string"]`, algo que APIM no acepta al importar. Para esta práctica se convirtió el archivo a OpenAPI 3.0 con un reemplazo de texto. En un proyecto real se configuraría la generación en 3.0 desde el código y la importación iría en el pipeline.
 
 ## Decisiones de diseño
 
@@ -122,13 +149,17 @@ Resumen de lo que se hizo:
 - **Cola detrás de una interfaz (`IColaPedidos`):** cambiar a Service Bus no toca el controller.
 - **Migraciones al arrancar:** cómodo para demo y contenedor; en producción se aplicarían desde el pipeline.
 - **Dockerfile multi-stage:** compila con la imagen SDK y ejecuta con la imagen runtime, más liviana y con menos superficie de ataque. Corre como usuario sin privilegios.
+- **CORS por configuración:** los orígenes permitidos vienen de `Cors:Origins`; si no se define, queda abierto solo para desarrollo.
 
 ## Limitaciones conocidas y mejoras
 
 - **Doble escritura:** el pedido se guarda y después se publica en la cola. Si la cola falla, el pedido queda guardado sin evento. Mejora: **patrón Outbox**.
-- **SQLite dentro del contenedor es efímero.** En producción: Azure SQL o PostgreSQL.
+- **SQLite dentro del contenedor es efímero** y se pierde al escalar a cero. En producción: Azure SQL o PostgreSQL.
+- **La API sigue accesible directamente**, sin pasar por APIM. En producción se cerraría con ingress interno o una red virtual.
+- **Sin autenticación** en la API (solo la subscription key de APIM). Mejora: tokens con Microsoft Entra ID.
+- **La Azure Function solo corre en local**; no está desplegada.
 - **Idempotencia:** las colas entregan al menos una vez; el consumidor debería ignorar pedidos ya procesados.
-- **Sin autenticación** en la API.
 - **Secretos:** usar Managed Identity y Key Vault en lugar de cadenas de conexión.
-- **Pruebas automatizadas** (unitarias y de integración) y **pipeline CI/CD** en Azure DevOps.
+- **Infraestructura como código:** definir los recursos con Bicep o Terraform, y automatizar el despliegue y la importación a APIM en un pipeline de CI/CD (hay un `azure-pipelines.yml` de ejemplo, no ejecutado).
+- **Pruebas automatizadas** (unitarias y de integración).
 - Reemplazar Storage Queue por **Service Bus** si se necesitan topics, orden o dead-letter avanzado.
