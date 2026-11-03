@@ -12,14 +12,15 @@ Proyecto de práctica para reforzar backend con .NET y Azure.
 ```mermaid
 flowchart LR
     U[Navegador<br/>Static Web Apps] -->|HTTPS + CORS| A
-    C[Cliente HTTP] -->|Ocp-Apim-Subscription-Key| M[API Management<br/>llave + rate limit]
+    C[Cliente HTTP] -->|1. pide token<br/>client credentials| E[Microsoft Entra ID]
+    C -->|2. Bearer token + subscription key| M[API Management<br/>validate-jwt + llave + rate limit]
     M --> A[Pedidos.Api<br/>ASP.NET Core + EF Core<br/>Container Apps]
     A -->|1. guarda| D[(SQLite)]
     A -->|2. publica evento| Q[[Cola pedidos-creados<br/>Azure Storage Queue]]
-    Q -->|3. QueueTrigger| F[Azure Function<br/>ProcesarPedido]
+    Q -->|3. QueueTrigger| F[Azure Function<br/>ProcesarPedido<br/>solo local]
 ```
 
-El frontend llama directo a la API (restringida por CORS a su origen). Los clientes externos entran por API Management, que exige una subscription key y aplica un límite de llamadas.
+El frontend llama directo a la API (restringida por CORS a su origen). Los clientes externos entran por API Management, que exige un token de aplicación (OAuth 2.0, Entra ID), una subscription key y aplica un límite de llamadas. La Function solo se ejecutó en local; no está desplegada en Azure.
 
 En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real.
 
@@ -33,7 +34,8 @@ En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real
 | Procesamiento | Azure Functions (isolated worker), `QueueTrigger` |
 | Contenedores | Docker (multi-stage), Docker Compose |
 | Nube | Azure Container Registry, Azure Container Apps |
-| Gateway | Azure API Management (nivel Consumption) |
+| Gateway | Azure API Management (nivel Consumption): subscription key, `rate-limit`, `validate-jwt` |
+| Identidad | Microsoft Entra ID, OAuth 2.0 client credentials |
 | Frontend | HTML + JavaScript simple, Azure Static Web Apps |
 
 ## Estructura
@@ -132,6 +134,8 @@ Resumen de lo que se hizo (con Azure CLI):
 6. **Azure Static Web Apps** (plan gratuito) para el frontend.
 7. **API Management** (nivel Consumption): se importó el OpenAPI de la API, se probó que sin subscription key responde 401 y con ella 200, y se añadió la política `rate-limit` (5 llamadas por 30 segundos) que devuelve 429.
 
+8. **Autenticación de aplicación** con Microsoft Entra ID: dos registros de aplicación (`pedidos-api` y `pedidos-cliente`), flujo *client credentials* y política `validate-jwt` en APIM. Sin token responde 401, con token válido 200 y con token inválido 401.
+
 ### Evidencia
 
 | Prueba | Captura |
@@ -142,6 +146,18 @@ Resumen de lo que se hizo (con Azure CLI):
 ### Notas de la importación a APIM
 
 .NET 10 genera OpenAPI 3.1 y escribe los números como `"type": ["number","string"]`, algo que APIM no acepta al importar. Para esta práctica se convirtió el archivo a OpenAPI 3.0 con un reemplazo de texto. En un proyecto real se configuraría la generación en 3.0 desde el código y la importación iría en el pipeline.
+
+## Autenticación entre aplicaciones (OAuth 2.0)
+
+La subscription key identifica qué aplicación llama y sirve para límites y cuotas, pero no autentica a nadie. Se agregó además autenticación a nivel de aplicación, sin usuarios:
+
+1. La aplicación cliente (`pedidos-cliente`) pide un token al endpoint de Entra ID con su `client_id` y un secreto (flujo *client credentials*, scope `api://<id-de-pedidos-api>/.default`).
+2. Envía la llamada a APIM con `Authorization: Bearer <token>` y la subscription key.
+3. APIM valida firma, emisor y audiencia con `validate-jwt` antes de reenviar a la API.
+
+Resultado probado desde Cloud Shell: sin token 401, token válido 200, token inválido 401. El token dura cerca de una hora y los secretos no se guardan en el repositorio.
+
+Qué **no** cubre: el token no lleva roles (cualquier aplicación registrada en el directorio podría pedir uno; se resolvería con *app roles*), el frontend no usa este flujo y la API sigue accesible directamente sin pasar por APIM.
 
 ## Decisiones de diseño
 
@@ -156,10 +172,10 @@ Resumen de lo que se hizo (con Azure CLI):
 - **Doble escritura:** el pedido se guarda y después se publica en la cola. Si la cola falla, el pedido queda guardado sin evento. Mejora: **patrón Outbox**.
 - **SQLite dentro del contenedor es efímero** y se pierde al escalar a cero. En producción: Azure SQL o PostgreSQL.
 - **La API sigue accesible directamente**, sin pasar por APIM. En producción se cerraría con ingress interno o una red virtual.
-- **Sin autenticación** en la API (solo la subscription key de APIM). Mejora: tokens con Microsoft Entra ID.
+- **Autenticación solo en APIM:** hay subscription key y `validate-jwt` entre aplicaciones, pero la API no valida nada por sí misma y no hay autenticación de usuarios. Mejoras: *app roles*, y cerrar el acceso directo para que solo APIM pueda llamarla.
 - **La Azure Function solo corre en local**; no está desplegada.
 - **Idempotencia:** las colas entregan al menos una vez; el consumidor debería ignorar pedidos ya procesados.
 - **Secretos:** usar Managed Identity y Key Vault en lugar de cadenas de conexión.
-- **Infraestructura como código:** definir los recursos con Bicep o Terraform, y automatizar el despliegue y la importación a APIM en un pipeline de CI/CD (hay un `azure-pipelines.yml` de ejemplo, no ejecutado).
+- **Infraestructura como código:** definir los recursos con Bicep o Terraform, y automatizar el despliegue y la importación a APIM en un pipeline de CI/CD (no hay pipeline en este repositorio).
 - **Pruebas automatizadas** (unitarias y de integración).
 - Reemplazar Storage Queue por **Service Bus** si se necesitan topics, orden o dead-letter avanzado.
