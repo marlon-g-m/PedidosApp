@@ -17,10 +17,10 @@ flowchart LR
     M --> A[Pedidos.Api<br/>ASP.NET Core + EF Core<br/>Container Apps]
     A -->|1. guarda| D[(SQLite)]
     A -->|2. publica evento| Q[[Cola pedidos-creados<br/>Azure Storage Queue]]
-    Q -->|3. QueueTrigger| F[Azure Function<br/>ProcesarPedido<br/>solo local]
+    Q -->|3. QueueTrigger| F[Azure Function<br/>ProcesarPedido<br/>Flex Consumption]
 ```
 
-El frontend llama directo a la API (restringida por CORS a su origen). Los clientes externos entran por API Management, que exige un token de aplicación (OAuth 2.0, Entra ID), una subscription key y aplica un límite de llamadas. La Function solo se ejecutó en local; no está desplegada en Azure.
+El frontend llama directo a la API (restringida por CORS a su origen). Los clientes externos entran por API Management, que exige un token de aplicación (OAuth 2.0, Entra ID), una subscription key y aplica un límite de llamadas. La Azure Function está desplegada en Azure (plan Flex Consumption) y consume la misma cola real que publica la API.
 
 En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real.
 
@@ -33,7 +33,7 @@ En local, la cola la emula **Azurite**. En Azure se usa una Storage Account real
 | Mensajería | Azure Storage Queues (Azurite en local) |
 | Procesamiento | Azure Functions (isolated worker), `QueueTrigger` |
 | Contenedores | Docker (multi-stage), Docker Compose |
-| Nube | Azure Container Registry, Azure Container Apps |
+| Nube | Azure Container Registry, Azure Container Apps, Azure Functions (plan Flex Consumption) |
 | Gateway | Azure API Management (nivel Consumption): subscription key, `rate-limit`, `validate-jwt` |
 | Identidad | Microsoft Entra ID, OAuth 2.0 client credentials |
 | Frontend | HTML + JavaScript simple, Azure Static Web Apps |
@@ -133,8 +133,8 @@ Resumen de lo que se hizo (con Azure CLI):
 5. **CORS** restringido al origen del frontend con la variable `Cors__Origins`.
 6. **Azure Static Web Apps** (plan gratuito) para el frontend.
 7. **API Management** (nivel Consumption): se importó el OpenAPI de la API, se probó que sin subscription key responde 401 y con ella 200, y se añadió la política `rate-limit` (5 llamadas por 30 segundos) que devuelve 429.
-
-8. **Autenticación de aplicación** con Microsoft Entra ID: dos registros de aplicación (`pedidos-api` y `pedidos-cliente`), flujo *client credentials* y política `validate-jwt` en APIM. Sin token responde 401, con token válido 200 y con token inválido 401.
+8. **Azure Function en Azure** (plan *Flex Consumption*, región Brazil South, runtime `dotnet-isolated` 10), con la misma Storage Account de la cola. Se creó con `az functionapp create` y se publicó con `func azure functionapp publish`. Al arrancar procesó los 5 mensajes que la API había dejado en la cola real sin consumidor; la cola `pedidos-creados-poison` no existe, es decir, no hubo mensajes fallidos. El panel de invocaciones del portal mostró 6 ejecuciones correctas y 0 errores, y un pedido nuevo creado en la API fue consumido en segundos.
+9. **Autenticación de aplicación** con Microsoft Entra ID: dos registros de aplicación (`pedidos-api` y `pedidos-cliente`), flujo *client credentials* y política `validate-jwt` en APIM. Sin token responde 401, con token válido 200 y con token inválido 401.
 
 ### Evidencia
 
@@ -142,6 +142,7 @@ Resumen de lo que se hizo (con Azure CLI):
 |---|---|
 | Límite de llamadas en APIM (200 y 429) | `evidencia/apim-prueba-429-powershell.png` |
 | Política `rate-limit` en el portal | `evidencia/apim-politica-rate-limit.png` |
+| Invocaciones de la Function en Azure (6 correctas, 0 errores) | `evidencia/function-invocaciones-azure.png` |
 
 ### Notas de la importación a APIM
 
@@ -173,7 +174,7 @@ Qué **no** cubre: el token no lleva roles (cualquier aplicación registrada en 
 - **SQLite dentro del contenedor es efímero** y se pierde al escalar a cero. En producción: Azure SQL o PostgreSQL.
 - **La API sigue accesible directamente**, sin pasar por APIM. En producción se cerraría con ingress interno o una red virtual.
 - **Autenticación solo en APIM:** hay subscription key y `validate-jwt` entre aplicaciones, pero la API no valida nada por sí misma y no hay autenticación de usuarios. Mejoras: *app roles*, y cerrar el acceso directo para que solo APIM pueda llamarla.
-- **La Azure Function solo corre en local**; no está desplegada.
+- **La Function es solo una simulación del trabajo en segundo plano:** registra el pedido y espera 500 ms, pero no actualiza la base de datos, así que el estado sigue en `Pendiente`.
 - **Idempotencia:** las colas entregan al menos una vez; el consumidor debería ignorar pedidos ya procesados.
 - **Secretos:** usar Managed Identity y Key Vault en lugar de cadenas de conexión.
 - **Infraestructura como código:** definir los recursos con Bicep o Terraform, y automatizar el despliegue y la importación a APIM en un pipeline de CI/CD (no hay pipeline en este repositorio).
